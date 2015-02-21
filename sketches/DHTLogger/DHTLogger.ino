@@ -68,7 +68,7 @@ void loop() {
   dtostrf(get_int_humidity(), DIGITS, PRECISION, INT_H);
   sprintf(CSV, "%d,%s,%s,%s,%s",TIME, INT_T, EXT_T, INT_H, EXT_H);
   Serial.println(CSV);
-  File datafile = SD.open("datalog2.txt", FILE_WRITE);
+  File datafile = SD.open("datalog.txt", FILE_WRITE);
   if (datafile) {
     datafile.println(CSV);
     datafile.close();
@@ -120,4 +120,3 @@ float get_ext_temp() {
     return val;
   }
 }
-
