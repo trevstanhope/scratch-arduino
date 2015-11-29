@@ -1,0 +1,84 @@
+/* Please see rxFifo for documentation
+*/
+/* Queue structure */
+#include <stdbool.h>
+#include <string.h>
+#include "txfifo.h"
+#include "uarttimer.h"
+const int TX_TAKEN_FOR_WRITE = 3;
+const int TX_TAKEN_FOR_READ = 2;
+const int TX_READY_FOR_READ = 1;
+const int TX_READY_FOR_WRITE = 0;
+#define TX_QUEUE_ELEMENTS 80
+#define TX_QUEUE_SIZE (TX_QUEUE_ELEMENTS + 1)
+#define TX_BUFF_SIZE 10
+int txReadyQueueSize = 0;
+int lastTxWrite = 0;
+int lastTxRead = 0;
+char TxQueue[TX_BUFF_SIZE][TX_QUEUE_SIZE];
+int TxQueueStatus[TX_BUFF_SIZE];
+int TxQueueIn, TxQueueOut;
+char emptyTxMessage[1] = {'\0'};
+int txCounter = 0;
+void TxQueueInit(void)
+{
+    txReadyQueueSize = 0;
+		for(txCounter = 0; txCounter< TX_BUFF_SIZE; txCounter++) {
+			TxQueueStatus[txCounter] = 0;
+		}
+}
+
+char * getTxBuffer(bool read) {
+	txCounter = 0;
+	if(read) {
+		while(TxQueueStatus[(txCounter+lastTxRead)%TX_BUFF_SIZE] != TX_READY_FOR_READ) {
+			txCounter++;
+			if(txCounter > TX_BUFF_SIZE) {
+				return emptyTxMessage;
+			}
+		}
+		TxQueueStatus[(txCounter+lastTxRead)%TX_BUFF_SIZE] = TX_TAKEN_FOR_READ;
+		return TxQueue[txCounter+lastTxRead];
+	}
+	else {
+		while(TxQueueStatus[(txCounter+lastTxWrite)%TX_BUFF_SIZE] != TX_READY_FOR_WRITE) {
+			txCounter++;
+			if(txCounter > TX_BUFF_SIZE) {
+				return emptyTxMessage;
+			}
+		}
+		TxQueueStatus[(txCounter+lastTxWrite)%TX_BUFF_SIZE] = TX_TAKEN_FOR_WRITE;
+		txReadyQueueSize--;
+		return TxQueue[txCounter+lastTxWrite];
+  }
+	
+}
+void returnTxBuffer(char * message, int size, bool read) {
+	txCounter = 0;
+	if(read) {
+		while(TxQueueStatus[txCounter] != TX_TAKEN_FOR_READ) {
+			txCounter++;
+			if(txCounter > TX_BUFF_SIZE) {
+				return;
+			}
+		}
+		lastTxRead = (lastTxRead+1)%TX_BUFF_SIZE;
+		TxQueueStatus[txCounter] = TX_READY_FOR_WRITE;
+	}
+	else {
+		while(TxQueueStatus[(txCounter+lastTxWrite)%TX_BUFF_SIZE] != TX_TAKEN_FOR_WRITE) {
+			txCounter++;
+			if(txCounter > TX_BUFF_SIZE) {
+				return;
+			}
+		}
+		TxQueueStatus[(txCounter+lastTxWrite)%TX_BUFF_SIZE] = TX_READY_FOR_READ;
+		txReadyQueueSize++;
+		lastTxWrite = (lastTxWrite+1)%TX_BUFF_SIZE;
+		enableTxTimer();
+  }
+}
+
+int getTxBufferReadySize() {
+	return txReadyQueueSize;
+}

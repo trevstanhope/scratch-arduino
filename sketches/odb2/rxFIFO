@@ -1,0 +1,142 @@
+/* Very simple queue
+ * These are FIFO queues which discard the new data when full.
+ *
+ * Queue is empty when in == out.
+ * If in != out, then 
+ *  - items are placed into in before incrementing in
+ *  - items are removed from out before incrementing out
+ * Queue is full when in == (out-1 + rx_QUEUE_SIZE) % rx_QUEUE_SIZE;
+ *
+ * The queue will hold rx_QUEUE_ELEMENTS number of items before the
+ * calls to QueuePut fail.
+ */
+
+/* Queue structure */
+#include <stdbool.h>
+#include <string.h>
+#include "rxfifo.h"
+#include "uarttimer.h"
+#include "helpers.h"
+//Modes that each buffer can be in, to prevent overwriting
+const int rx_TAKEN_FOR_WRITE = 3;
+const int rx_TAKEN_FOR_READ = 2;
+const int rx_READY_FOR_READ = 1;
+const int rx_READY_FOR_WRITE = 0;
+//Size of string max
+#define rx_QUEUE_ELEMENTS 80
+#define rx_QUEUE_SIZE (rx_QUEUE_ELEMENTS + 1)
+//Size of buffer max
+#define rx_BUFF_SIZE 10
+//Variable keeping track of how big the rxQueue is
+uint32_t rxReadyQueueSize = 0;
+//Keep track of where the read and write were last placed, useful for keeping head and tail pointers
+int lastrxWrite = 0;
+int lastrxRead = 0;
+int timeoutTotal = 0;
+//array itself
+char rxQueue[rx_BUFF_SIZE][rx_QUEUE_SIZE];
+//status keeping track of the above 4 statuses
+int rxQueueStatus[rx_BUFF_SIZE];
+//Send or receive empty message if it doesn't exist
+char emptyrxMessage[1] = {'\0'};
+char *messageToSend;
+//General purpose counter
+int rxCounter = 0;
+//Initialize buffer queue
+void rxQueueInit(void)
+{
+    rxReadyQueueSize = 0;
+		for(rxCounter = 0; rxCounter< rx_BUFF_SIZE; rxCounter++) {
+			rxQueueStatus[rxCounter] = 0;
+		}
+}
+
+//Obtain an rx buffer for writing to or reading from. 
+char * getRxBuffer(bool read) {
+	rxCounter = 0;
+	//If wanting to read from a buffer
+	if(read) {
+		//Loop through all elements starting at where the last read was returned
+		while(rxQueueStatus[(rxCounter+lastrxRead)%rx_BUFF_SIZE] != rx_READY_FOR_READ) {
+			rxCounter++;
+			//If none are found, return empty message to read, which will put the rx to sleep
+			if(rxCounter > rx_BUFF_SIZE) {
+				return emptyrxMessage;
+			}
+		}
+		//If buffer found, return the buffer and indicate it is in use, reduce rxReadyQueueSize
+		rxReadyQueueSize--;
+		rxQueueStatus[(rxCounter+lastrxRead)%rx_BUFF_SIZE] = rx_TAKEN_FOR_READ;
+		return rxQueue[rxCounter+lastrxRead];
+	}
+	//If wanting to write to a buffer
+	else {
+		//Loop through all elements starting at where the last write was returned
+		while(rxQueueStatus[(rxCounter+lastrxWrite)%rx_BUFF_SIZE] != rx_READY_FOR_WRITE) {
+			rxCounter++;
+			//If no buffer to write to, return empty RX message
+			if(rxCounter > rx_BUFF_SIZE) {
+				//TODO: Should die here!!
+				return emptyrxMessage;
+			}
+		}
+		//If found, indicate taken for a write
+		rxQueueStatus[(rxCounter+lastrxWrite)%rx_BUFF_SIZE] = rx_TAKEN_FOR_WRITE;
+		return rxQueue[rxCounter+lastrxWrite];
+  }
+	
+}
+void returnRxBuffer(char * message, bool read) {
+	rxCounter = 0;
+	//if read operation
+	if(read) {
+		//Find nearest rxQueue thats taken for read, could be an issue, likely not.
+		while(rxQueueStatus[rxCounter] != rx_TAKEN_FOR_READ) {
+			rxCounter++;
+			//If none exist, should blow up
+			if(rxCounter > rx_BUFF_SIZE) {
+				//TODO: Die
+				return;
+			}
+		}
+		//Incremeent last RX read
+		lastrxRead = (lastrxRead+1)%rx_BUFF_SIZE;
+		//Change status of ready for write
+		rxQueueStatus[rxCounter] = rx_READY_FOR_WRITE;
+	}
+	//If for write
+	else {
+		//Only grab
+		while(rxQueueStatus[(rxCounter+lastrxWrite)%rx_BUFF_SIZE] != rx_TAKEN_FOR_WRITE) {
+			rxCounter++;
+			//If none exist, should blow up
+			if(rxCounter > rx_BUFF_SIZE) {
+				//TODO: Die
+				return;
+			}
+		}
+		//set status as ready for read, increment ready queue size and update last rx write
+		rxQueueStatus[(rxCounter+lastrxWrite)%rx_BUFF_SIZE] = rx_READY_FOR_READ;
+		rxReadyQueueSize++;
+		lastrxWrite = (lastrxWrite+1)%rx_BUFF_SIZE;
+  }
+}
+
+
+char * waitForMessage(int timeoutMs) {
+	timeoutTotal = 0;
+	while(getRxBufferReadySize() < 1 && timeoutTotal < timeoutMs) {
+		delayTenUs(100);
+		timeoutTotal++;
+	}
+	if(timeoutTotal < timeoutMs) {
+		messageToSend = getRxBuffer(1);
+		returnRxBuffer(messageToSend,1);
+	}
+	return messageToSend;
+}
+
+//get rx buffer ready size, useful to determine if there's data to read
+int getRxBufferReadySize() {
+	return rxReadyQueueSize;
+}

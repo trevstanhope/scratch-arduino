@@ -1,0 +1,139 @@
+#include "UartInit.h"
+#include <string.h>
+#include "helpers.h"
+#include "RxFifo.h"
+int charPointer = 0;
+int charPointerRx = 0;
+char message[40];
+char messageRx[40];
+int called = 0;
+//Timeout for checking chars
+int timeout = 0;
+char tempCharRx = ' ';
+//Empty message to indicate no data
+char dummyMessage[1] = "";
+char *response;
+uint32_t UART1RISSTATUS = 0;
+void putUARTMessageInFIFO(void);
+//Init
+void UART_Init(void){
+  SYSCTL -> RCGCUART |= SYSCTL_RCGCUART_R1; // activate UART1
+  SYSCTL -> RCGCGPIO |= SYSCTL_RCGCGPIO_R2; // activate port A
+  UART1 -> CTL &= ~UART_CTL_UARTEN;        // disable UART
+  UART1 -> IBRD = 26;                       // IBRD = int(16,000,000 / (16 * 115,200)) = int(8.680555) = 8
+  UART1 ->FBRD  = 3;                      // FBRD = int(0.680555 * 64 + 0.5) = 44
+                                           // 8 bit word length (no parity bits, one stop bit, enable FIFOs)
+  UART1 -> LCRH = (UART_LCRH_WLEN_8|UART_LCRH_FEN);
+  GPIOC -> AMSEL &= ~0x30;                // disable analog functionality on PA
+  GPIOC -> AFSEL |= 0x30;                 // enable alt funct on PC4-5
+  GPIOC -> DEN |= 0x30;                    // enable digital I/O on PC4-5
+                                           // configure PA1-0 as UART   (just in case)
+  GPIOC -> PCTL = (GPIOC -> PCTL & 0xFF00FFFF)+0x00220000;
+	UART1 -> IFLS &= 0x00 << 3;  
+	UART1 -> IM |= 0x10;
+	UART1RISSTATUS = UART1->IM;
+	NVIC ->ISER[0] |= 0x1<<6;
+	NVIC ->ICPR[0] |= 0x1<<6;
+	NVIC ->IP[6] = 0x00;
+	UART1 -> CTL |= UART_CTL_UARTEN;         // enable UART
+}
+
+void UART1_Handler() {
+	called++;
+	UART1RISSTATUS =UART1->MIS;
+	//RX
+	if((UART1RISSTATUS & 0x10) != 0) {
+		putUARTMessageInFIFO();
+		UART1->ICR |= 0x10;
+	}
+	//TX
+	if((UART1RISSTATUS & 0x20) != 0) {
+		UART1->ICR |= 0x20;
+	}
+	NVIC->ICPR[0] |= 0x1<<6;
+	UART1->ICR |=0x30;
+}
+	
+	//------------UART_InChar------------
+// Wait for serial port input
+// Input: none
+// Output: ASCII code for chatracter received 
+unsigned char UART_InChar(void){
+	// wait for data in Rx FIFO
+	timeout = 0;
+  while((UART1 -> FR & UART_FR_RXFE) != 0 && timeout < 1000) {
+		timeout++;
+	}
+		if(timeout >= 1000) {
+			return 0;
+		}// empty loop body -- just wait, with timeout
+	// read a char from Rx FIFO
+  return((unsigned char)(UART1 -> DR & 0xFF));
+}
+//------------UART_OutChar------------
+// Output 8-bit to serial port
+// Input: data is an 8-bit ASCII character to be transmitted
+// Output: none
+void UART_OutChar(unsigned char data){
+  // wait for space in Tx FIFO
+  while((UART1 -> FR & UART_FR_TXFF) != 0);
+  // write char to Tx FIFO
+  UART1 -> DR = data;
+}
+
+void writeUARTMessage(char * message) {
+	charPointer = 0;
+	while(message[charPointer] != '\0') {
+		UART_OutChar(message[charPointer]);
+		charPointer++;
+	}
+	charPointer = 0;
+}
+void putUARTMessageInFIFO() {
+		do { 
+		tryagain:
+		//Obtain inchar
+		tempCharRx = UART_InChar();
+		//If its a dummy message, return a dummy message, aka nothing.
+		if(tempCharRx == '\0' || tempCharRx == 0) {
+			goto tryagain;
+		}
+		//add temp character to the message received if its non zero
+		messageRx[charPointerRx] = tempCharRx;
+		//Print back out the character to show the user it's been recognized
+		//Increment
+		charPointerRx++;
+	} while(messageRx[charPointerRx-1] != '>' && messageRx[charPointerRx-1] != '\r' && charPointerRx < 79);
+	//Once a full msg has been received, append LF & CR
+		messageRx[charPointerRx] = '\0';
+	//Reset message pointer
+	if(strstr(messageRx,">") != NULL || strcmp(messageRx,"\r") == 0) {
+			charPointerRx = 0;
+		return;
+	}
+	response = getRxBuffer(0);
+	memcpy(response, messageRx, charPointerRx);
+	returnRxBuffer(response,0);
+	charPointerRx = 0;
+}
+//Returns empty string if no uart message available on buffer. Aka someone lied to you if they asked you to call that in an ISR.
+char * receiveUARTMessage() {
+	do { 
+		//Obtain inchar
+		tempCharRx = UART_InChar();
+		//If its a dummy message, return a dummy message, aka nothing.
+		if(tempCharRx == '\0' || tempCharRx == 0) {
+			return dummyMessage;
+		}
+		//add temp character to the message received if its non zero
+		messageRx[charPointerRx] = tempCharRx;
+		//Print back out the character to show the user it's been recognized
+		//Increment
+		charPointerRx++;
+	} while(messageRx[charPointerRx-1] != '>');
+	//Once a full msg has been received, append LF & CR
+	messageRx[charPointerRx] = '\0';
+	//Reset message pointer
+	charPointerRx = 0;
+	return messageRx;
+}

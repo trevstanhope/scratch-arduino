@@ -1,0 +1,87 @@
+#include "uartTimer.h"
+#include "helpers.h"
+#include "CU_TM4C123.h"
+#include "txFifo.h"
+#include "uartinit.h"
+#include <string.h>
+#include "rxFifo.h"
+int counterTime = 0;
+char * messageToSendTimer;
+char * receiveMessage;
+char * tmpMsgUart;
+int stringSize = 0;
+//Used for tracking UART TX message sends
+void setupTimer2(void) {
+	// This timer will be used for delays
+SYSCTL -> RCGCTIMER |= (1UL << 2);
+counterTime = SYSCTL->RCGCTIMER;
+TIMER2 -> CTL &= ~(1UL << 0);
+TIMER2 -> CFG = 0x4UL; 
+TIMER2 -> TAMR = 0x2UL;
+TIMER2 -> TAPR = 19UL; 
+TIMER2 -> TAILR = 199UL; 
+NVIC->ISER[0] |= 0x1<<23;
+NVIC->ICPR[0] |= 0x1<<23;
+NVIC->IP[23] = 0x10<<1;
+TIMER2->ICR |= 0x1;
+TIMER2->IMR |= 0x1;
+}
+
+//Used for polling RX
+void setupTimer3(void) {
+	// This timer will be used for delays
+SYSCTL -> RCGCTIMER |= (1UL << 3);
+counterTime = SYSCTL->RCGCTIMER;
+TIMER3 -> CTL &= ~(1UL << 0);
+TIMER3 -> CFG = 0x4UL; 
+TIMER3 -> TAMR = 0x2UL;
+TIMER3 -> TAPR = 19UL; 
+TIMER3 -> TAILR = 499UL; 
+NVIC->ISER[1] |= 0x1<<3;
+NVIC->ICPR[1] |= 0x1<<3;
+NVIC->IP[35] = 0x10<<1;
+TIMER3->ICR |= 0x1;
+TIMER3->IMR |= 0x1;
+TIMER3 -> CTL |= (1UL << 0);
+}
+
+//Only enable TX timer when there is a trigger for data to send
+void enableTxTimer() {
+	TIMER2 -> CTL |= (1UL << 0);
+}
+
+//Check if theres new data in the UART buffer
+void TIMER3A_Handler() {
+	//Obtain message and find string size
+	receiveMessage = receiveUARTMessage();
+	while(receiveMessage[stringSize] != '\0') {
+		stringSize++;
+	}
+	//Check if it is a non emptry string
+	if(strncmp(receiveMessage,"",1) != 0) {
+		//Get an Rx buffer to place message in
+		tmpMsgUart = getRxBuffer(0);
+		memcpy(tmpMsgUart,receiveMessage,stringSize);
+		returnRxBuffer(tmpMsgUart,0);
+	}
+}
+
+//TX buffer
+void TIMER2A_Handler() {
+	//CRIT region
+	WTIMER1 -> IMR |= 0x0;
+	//get TX buffer to read from
+	messageToSendTimer = getTxBuffer(1);
+	//Write message
+	writeUARTMessage(messageToSendTimer);
+	returnTxBuffer(messageToSendTimer,0,1);
+	//CRIT region ends
+	WTIMER1 -> IMR |= 0x1;
+	//Turn off TX if no more data to send
+	if(getTxBufferReadySize() == 0) {
+		TIMER2 -> CTL &= ~(1UL << 0);
+	}
+	//Turn off flags
+	NVIC->ICPR[0] |= 0x1<<23;
+	TIMER2->ICR |= 0x1;
+}

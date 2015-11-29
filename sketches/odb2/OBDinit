@@ -1,0 +1,166 @@
+#include "UartInit.h"
+#include <stdio.h>
+#include <string.h>
+#include "rxFifo.h"
+#include "LCD.h"
+#include "OBDCommands.h"
+#include "OBDInit.h"
+#include "menu.h"
+#include "speaker.h"
+char* responseMsg;
+int protoCount = -1;
+int dummy = 0;
+bool protocolSuccess = false;
+bool carConnected = false;
+bool sendKeepAlive = false;
+void setupWatchdog(void);
+bool initODB() {
+	carConnected = false;
+	sendKeepAlive = false;
+	protoCount = 0;
+	do {
+		writeUARTMessage("ATZ\r\n");
+	responseMsg = waitForMessage(1000);
+				writeUARTMessage("ATZ\r\n");
+	responseMsg = waitForMessage(1000);
+		writeMessage(responseMsg);
+		delayTenUs(10000);
+	writeUARTMessage("ATE0\r\n");
+	responseMsg = waitForMessage(1000);
+		//writeMessage(responseMsg);
+		delayTenUs(10000);
+		writeUARTMessage("ATL1\r\n");
+	responseMsg = waitForMessage(1000);
+		//writeMessage(responseMsg);
+		if(protoCount == -1) {
+			writeMessage("Welcome! Testing for protocol");
+			delayTenUs(50000);
+		}
+		else {
+			writeMessage("Trying new protocol");
+		}
+		protoCount++;
+		delayTenUs(50000);
+		writeMessage("Trying To Connect...");
+		delayTenUs(10000);
+		if(protoCount >= 8) {
+			delayTenUs(10);
+		}
+		protocolSuccess = setProtocol(protoCount);
+ } while(!protocolSuccess && protoCount < PROTO_COUNT);
+	if(!protocolSuccess) {
+			writeMessage("Connecting to car failed.");
+				changeTimer(500,0.5);
+				delayTenUs(20000);
+				changeTimer(400,0.5);
+				delayTenUs(20000);
+				turnOffSpeaker();
+				delayTenUs(500000);
+		return false;
+	}
+	
+	writeUARTMessage("ATDP\r\n");
+		responseMsg = waitForMessage(1000);
+	writeMessage(responseMsg);
+		delayTenUs(10000);
+	if(strstr(responseMsg, "ERROR") != NULL) {
+		return false;
+	}
+	//Turn on watchdog timer
+	setupWatchdog();
+	carConnected = true;
+	return true;
+}
+
+void resetWatchdog(void) {
+	WTIMER1->CTL &= ~(1UL << 0);
+	WTIMER1->TAV = 320000000;
+	WTIMER1 -> TAILR = 320000000; 
+	WTIMER1->CTL |= 0x1;
+	delayTenUs(10);
+}
+
+void setupWatchdog(void) {
+	// This timer will be used for delays
+SYSCTL -> RCGCWTIMER |= (1UL << 1);
+dummy = SYSCTL->RCGCWTIMER;
+WTIMER1 -> CTL &= ~(1UL << 0);
+WTIMER1 -> CFG = 0x4UL; 
+WTIMER1 -> TAMR = 0x2UL;
+WTIMER1 -> TAILR = 320000000; 
+WTIMER1 -> IMR |= 0x1;
+WTIMER1 -> ICR |= 0x1;
+NVIC->ISER[3] |= 0x1;
+NVIC->ICPR[3] |= 0x1;
+NVIC->IP[96] 	= 0x70<<1;
+WTIMER1->ICR |= 0x1;
+WTIMER1->CTL |= 0x1;
+}
+
+void WTIMER1A_Handler() {
+	if(!sendKeepAlive || strstr(sendOBDCommand(RPM_LEVEL),"NO DATA")) {
+		__set_PRIMASK(1);
+		sendKeepAlive = false;
+	writeMessage("Disconnect due to Inactivity.");
+				changeTimer(400,0.5);
+				delayTenUs(5000);
+				turnOffSpeaker();
+				delayTenUs(2000);
+				changeTimer(400,0.5);
+				delayTenUs(5000);
+				turnOffSpeaker();
+				delayTenUs(2000);
+				changeTimer(400,0.5);
+				delayTenUs(5000);
+				turnOffSpeaker();
+		delayTenUs(50000);
+	carConnected = false;
+		disablePollTimer();
+		__set_PRIMASK(0);
+		forceToReconnectMenu();
+	}
+	WTIMER1 -> CTL &= ~(1UL << 0);
+	WTIMER1->ICR |= 0x1;
+	NVIC->ICPR[3] |= 0x1;
+}
+bool setProtocol(OBD_PROTOCOLS h)
+{
+    char buf[80];
+	if (h == PROTO_AUTO) {
+		writeUARTMessage("ATSP 00\r\n");
+	} else {
+		sprintf(buf, "ATSP %d\r\n", h);
+		writeUARTMessage(buf);
+	}
+	responseMsg = waitForMessage(10000);
+	if(strstr(responseMsg,"OK") != NULL) {
+		writeMessage("Testing connection");
+		delayTenUs(1000);
+		writeUARTMessage("010C \r\n");
+		responseMsg = waitForMessage(10000);
+		if(strstr(responseMsg,"SEARCHING") != NULL) {
+					writeMessage(responseMsg);
+			responseMsg = waitForMessage(3000000);
+		}
+		writeMessage(responseMsg);
+	}
+	else {
+		return false;
+	}
+	if(strstr(responseMsg,"ERROR") != NULL || strstr(responseMsg,"UNABLE") != NULL) {
+		writeMessage("Connection failed");
+		delayTenUs(10000);
+		return false;
+	}
+	else {
+		writeMessage("Connection Successful");
+						changeTimer(500,0.5);
+				delayTenUs(20000);
+				changeTimer(600,0.5);
+				delayTenUs(20000);
+				turnOffSpeaker();
+		delayTenUs(10000);
+		return true;
+		
+	}
+}

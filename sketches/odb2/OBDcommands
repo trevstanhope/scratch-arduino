@@ -1,0 +1,92 @@
+#include "OBDCommands.h"
+#include "UARTINIT.h"
+#include "RxFifo.h"
+#include <string.h>
+#include "LCD.h"
+#include "helpers.h"
+#include <stdio.h>
+#include "OBDInit.h"
+char empty[1] = "";
+char * normalizedResponse;
+char * commandResponse;
+char * result;
+char * DTC;
+char* normalizeData(OBD_COMMAND command, char* data);
+char * sendOBDCommand(OBD_COMMAND command) {
+		if(carConnected) {
+			char PID[2];
+		if(command != TROUBLE_CODES) {
+			sprintf(PID,"%02X",command);
+			writeUARTMessage("01");
+			writeUARTMessage(PID);
+			writeUARTMessage("\r\n");
+		}
+		else {
+			strcpy(PID,"03");
+			writeUARTMessage("03\r\n");
+		}
+		do {
+			commandResponse = waitForMessage(1000);
+		}while(carConnected && strstr(commandResponse, "NO DATA") == NULL && strstr(commandResponse, PID) == NULL);
+
+		if(strstr(commandResponse,"SEARCHING") != NULL) {
+			commandResponse = waitForMessage(300000);	
+		}
+		if(strstr(commandResponse,"NO") == NULL && strstr(commandResponse,"UNABLE") == NULL && strstr(commandResponse,"ERROR") == NULL) {
+			if(command == TROUBLE_CODES) {
+				do {
+					DTC = waitForMessage(100);
+					strcat(commandResponse, DTC);
+				} while(DTC[0] != '\0');
+			}
+			normalizedResponse = normalizeData(command,commandResponse);
+			resetWatchdog();
+			return normalizedResponse;
+		}
+		if(strstr(commandResponse,"NO DATA")) {
+			if(command != TROUBLE_CODES) {
+			commandResponse = "NO DATA";
+			}
+			else {
+				commandResponse = "NO CODES";
+			}
+		}
+		return commandResponse;
+	}
+	return empty;
+}
+
+
+char* normalizeData(OBD_COMMAND command, char* data)
+{
+	char tempResult[40];
+	result = tempResult;
+	switch (command) {
+		
+			case RPM_LEVEL:
+			//010C
+			sprintf(result,"%d",obtain16BitResult(data)/4);
+			strcat(result, " RPM");
+			break;
+		case VEHICLE_SPEED:
+			//010D
+			sprintf(result,"%d",obtain8BitResult(data));
+			strcat(result, " km/h");
+			break;
+		case ENGINE_LOAD:
+			//0104
+			sprintf(result,"%d",obtain8BitResult(data)*100/255);
+			strcat(result, "% ENGINE LOAD");
+			break;
+		case COOLANT_TEMP:
+			//0105
+			sprintf(result,"%d",obtain8BitResult(data)-40);
+			strcat(result, "C ");
+			break;
+		case TROUBLE_CODES:
+			strcpy(result,data);
+		break;
+			
+	}
+	return result;
+}
